@@ -1,0 +1,61 @@
+# Static postfix config. myhostname + TLS paths are set by entrypoint.sh.
+compatibility_level = 3.6
+maillog_file = /dev/stdout
+
+myorigin = $myhostname
+mydestination = localhost
+# Only trust localhost. Never add the docker network here (open relay!).
+mynetworks = 127.0.0.0/8 [::1]/128
+inet_protocols = all
+biff = no
+append_dot_mydomain = no
+recipient_delimiter = +
+message_size_limit = 52428800
+mailbox_size_limit = 0
+alias_maps =
+alias_database =
+
+# --- Virtual domains, read from postgres (views maintained by the app) -----
+virtual_mailbox_domains = proxy:pgsql:/etc/postfix/pgsql/domains.cf
+virtual_mailbox_maps = proxy:pgsql:/etc/postfix/pgsql/mailboxes.cf
+virtual_alias_maps = proxy:pgsql:/etc/postfix/pgsql/aliases.cf
+smtpd_sender_login_maps = proxy:pgsql:/etc/postfix/pgsql/sender-logins.cf
+virtual_transport = lmtp:inet:dovecot:24
+
+# --- Incoming (port 25) ----------------------------------------------------
+smtpd_banner = $myhostname ESMTP
+smtpd_helo_required = yes
+disable_vrfy_command = yes
+strict_rfc821_envelopes = yes
+smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, defer_unauth_destination
+smtpd_recipient_restrictions =
+    reject_non_fqdn_recipient,
+    reject_unknown_recipient_domain
+smtpd_sender_restrictions = reject_non_fqdn_sender, reject_unknown_sender_domain
+smtpd_helo_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_invalid_helo_hostname
+smtpd_data_restrictions = reject_unauth_pipelining
+
+# --- Spam + DKIM via rspamd ------------------------------------------------
+smtpd_milters = inet:rspamd:11332
+non_smtpd_milters = $smtpd_milters
+milter_default_action = accept
+milter_protocol = 6
+milter_mail_macros = i {mail_addr} {client_addr} {client_name} {auth_authen}
+
+# --- TLS -------------------------------------------------------------------
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_loglevel = 1
+smtpd_tls_received_header = yes
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_protocols = >=TLSv1.2
+smtpd_tls_session_cache_database = lmdb:${data_directory}/smtpd_scache
+smtp_tls_security_level = may
+smtp_tls_loglevel = 1
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+smtp_tls_session_cache_database = lmdb:${data_directory}/smtp_scache
+
+# --- SASL (logins checked by dovecot) -------------------------------------
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = inet:dovecot:12345
+smtpd_sasl_auth_enable = no

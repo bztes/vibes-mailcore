@@ -1,0 +1,92 @@
+name: Images
+
+# Builds and pushes all images for a release. Runs from release.yml when a
+# release is tagged, and weekly to rebuild the latest release on fresh base
+# images (upstream and Debian security fixes), under the same tags.
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # Called from release.yml: the version just tagged. Otherwise: the latest release.
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)
+            VERSION=${tag#v}
+          fi
+          [ -n "$VERSION" ] || echo "No release yet, nothing to rebuild."
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  docker:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - { name: app, context: . }
+          - { name: postfix, context: docker/postfix }
+          - { name: dovecot, context: docker/dovecot }
+          - { name: rspamd, context: docker/rspamd }
+          - { name: unbound, context: docker/unbound }
+          - { name: postgres, context: docker/postgres }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      # Emulates arm64 so the amd64 runner can build the arm64 variant.
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Pushes to private GHCR packages (set visibility under the package settings).
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # v1.2.3 -> 1.2.3 + 1.2 + latest, plus a sha-<short> tag of the release commit.
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          context: git
+          images: ghcr.io/${{ github.repository_owner }}/vibes-mailcore-${{ matrix.name }}
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=sha
+
+      # Always pull the newest base image. The weekly rebuild also skips the
+      # cache, so apt-get upgrades the Debian packages in postfix and unbound.
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          no-cache: ${{ inputs.version == '' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

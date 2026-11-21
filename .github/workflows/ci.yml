@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm check
+
+      - run: pnpm lint
+
+  # Decides which images the change touches, so the docker job only builds those.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      images: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          # Editing this workflow rebuilds everything.
+          filters: |
+            app:
+              - .github/workflows/ci.yml
+              - Dockerfile
+              - .dockerignore
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+              - tsconfig.json
+              - vite.config.ts
+              - svelte.config.*
+              - src/**
+              - static/**
+              - drizzle/**
+            postfix:
+              - .github/workflows/ci.yml
+              - docker/postfix/**
+            dovecot:
+              - .github/workflows/ci.yml
+              - docker/dovecot/**
+            rspamd:
+              - .github/workflows/ci.yml
+              - docker/rspamd/**
+            unbound:
+              - .github/workflows/ci.yml
+              - docker/unbound/**
+            postgres:
+              - .github/workflows/ci.yml
+              - docker/postgres/**
+
+  # Makes sure the changed images still build; they are only pushed on release.
+  # amd64 only: the Dockerfiles have no arch-specific steps, and building arm64
+  # under QEMU is slow. The release build still covers arm64.
+  docker:
+    needs: changes
+    if: needs.changes.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: ${{ fromJSON(needs.changes.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Reads the release cache and its own CI cache; writes only the CI one,
+      # under a separate scope so PR builds don't evict the release layers.
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.name == 'app' && '.' || format('docker/{0}', matrix.name) }}
+          platforms: linux/amd64
+          push: false
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}
+            type=gha,scope=ci-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.name }}

@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  changesets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.changesets.outputs.published == 'true' && fromJSON(steps.changesets.outputs.published-packages)[0].version || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Opens/updates the "chore: release" PR; once that is merged, tags vX.Y.Z and creates a GitHub release.
+      - id: changesets
+        uses: changesets/action@v2
+        with:
+          version-script: pnpm changeset version
+          publish-script: pnpm changeset tag
+          commit-message: 'chore: release'
+          pr-title: 'chore: release'
+
+  docker:
+    needs: changesets
+    # Only when changesets just tagged a release.
+    if: needs.changesets.outputs.version != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
+    with:
+      version: ${{ needs.changesets.outputs.version }}

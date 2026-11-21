@@ -1,0 +1,122 @@
+name: mailcore
+
+services:
+  # --- Admin UI ------------------------------------------------------------
+  app:
+    # Released images from ghcr.io; `--build` builds them from this checkout instead.
+    build: .
+    image: ghcr.io/bztes/vibes-mailcore-app:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      APP_DATABASE_URL: postgres://mailcore:${POSTGRES_PASSWORD}@postgres:5432/mailcore
+      APP_REDIS_URL: redis://redis:6379
+      MAILCORE_HOSTNAME: ${MAILCORE_HOSTNAME}
+      APP_DEFAULT_MAILBOX_GB: ${APP_DEFAULT_MAILBOX_GB:-5}
+      APP_DOVEADM_URL: http://dovecot:8080
+      DOVECOT_DOVEADM_PASSWORD: ${DOVECOT_DOVEADM_PASSWORD:?set DOVECOT_DOVEADM_PASSWORD in .env}
+      ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN in .env, e.g. https://admin.example.com}
+      # Behind Caddy: take the client IP from X-Forwarded-For (login rate limiting)
+      ADDRESS_HEADER: X-Forwarded-For
+      XFF_DEPTH: 1
+    ports:
+      # Caddy on the host proxies to this. Only reachable from localhost.
+      - 127.0.0.1:${APP_PORT:-3000}:3000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  # --- Mail ----------------------------------------------------------------
+  # Each service has its own image with the config from docker/<service> baked
+  # in (dovecot, rspamd and postgres on top of the official images).
+  postfix:
+    build: docker/postfix
+    image: ghcr.io/bztes/vibes-mailcore-postfix:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    init: true
+    hostname: ${MAILCORE_HOSTNAME}
+    environment:
+      MAILCORE_HOSTNAME: ${MAILCORE_HOSTNAME:?set MAILCORE_HOSTNAME in .env}
+      POSTGRES_MAILSERVER_PASSWORD: ${POSTGRES_MAILSERVER_PASSWORD:?set POSTGRES_MAILSERVER_PASSWORD in .env}
+    volumes:
+      - ${MAILCORE_CERT_DIR:-./data/certs}:/certs:ro
+      - ${POSTFIX_QUEUE_VOLUME:-postfix-queue}:/var/spool/postfix
+    ports:
+      - ${POSTFIX_SMTP_PORT:-25}:25
+      - ${POSTFIX_SUBMISSIONS_PORT:-465}:465
+      - ${POSTFIX_SUBMISSION_PORT:-587}:587
+    depends_on:
+      postgres: { condition: service_healthy }
+      dovecot: { condition: service_started }
+      rspamd: { condition: service_started }
+
+  dovecot:
+    build: docker/dovecot
+    image: ghcr.io/bztes/vibes-mailcore-dovecot:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    hostname: ${MAILCORE_HOSTNAME}
+    environment:
+      MAILCORE_HOSTNAME: ${MAILCORE_HOSTNAME:?set MAILCORE_HOSTNAME in .env}
+      POSTGRES_MAILSERVER_PASSWORD: ${POSTGRES_MAILSERVER_PASSWORD:?set POSTGRES_MAILSERVER_PASSWORD in .env}
+      DOVECOT_DOVEADM_PASSWORD: ${DOVECOT_DOVEADM_PASSWORD}
+      DOVECOT_AUTO_DELETE_DAYS: ${DOVECOT_AUTO_DELETE_DAYS:-30}
+    volumes:
+      - ${MAILCORE_CERT_DIR:-./data/certs}:/certs:ro
+      - ${DOVECOT_MAIL_VOLUME:-mail}:/srv/vmail
+    ports:
+      - ${DOVECOT_IMAPS_PORT:-993}:993
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  rspamd:
+    build: docker/rspamd
+    image: ghcr.io/bztes/vibes-mailcore-rspamd:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    init: true
+    environment:
+      # Read in local.d as {= env.GREYLISTING =} etc.
+      RSPAMD_GREYLISTING: ${RSPAMD_GREYLISTING:-off}
+      RSPAMD_SPAM_REJECT_SCORE: ${RSPAMD_SPAM_REJECT_SCORE:-15}
+    volumes:
+      - ${RSPAMD_VOLUME:-rspamd}:/var/lib/rspamd
+    depends_on:
+      redis: { condition: service_started }
+      unbound: { condition: service_started }
+
+  # Own DNS resolver for rspamd, so blocklists like Spamhaus answer (they refuse
+  # shared resolvers).
+  unbound:
+    build: docker/unbound
+    image: ghcr.io/bztes/vibes-mailcore-unbound:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    init: true
+
+  # --- Storage -------------------------------------------------------------
+  postgres:
+    build: docker/postgres
+    image: ghcr.io/bztes/vibes-mailcore-postgres:${MAILCORE_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailcore
+      POSTGRES_DB: mailcore
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_MAILSERVER_PASSWORD: ${POSTGRES_MAILSERVER_PASSWORD}
+    volumes:
+      - ${POSTGRES_VOLUME:-postgres}:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'mailcore', '-d', 'mailcore']
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--save', '300', '1']
+    volumes:
+      - ${REDIS_VOLUME:-redis}:/data
+
+volumes:
+  postgres:
+  redis:
+  rspamd:
+  mail:
+  postfix-queue:

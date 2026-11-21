@@ -1,0 +1,55 @@
+# Local development:
+#   docker compose -f compose.yml -f compose.dev.yml up -d
+#   pnpm dev
+# The app runs on your machine, everything else in docker.
+# Config is mounted from ./docker instead of the app image, so edits only need
+# a restart of the service.
+services:
+  app:
+    profiles: [app]
+  # Self-signed certificate for local dev, created once in MAILCORE_CERT_DIR.
+  certs:
+    build: docker/postfix
+    entrypoint:
+      - sh
+      - -c
+      - |
+        [ -f /certs/$$MAILCORE_HOSTNAME.crt ] || openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+          -subj /CN=$$MAILCORE_HOSTNAME -keyout /certs/$$MAILCORE_HOSTNAME.key -out /certs/$$MAILCORE_HOSTNAME.crt
+    environment:
+      MAILCORE_HOSTNAME: ${MAILCORE_HOSTNAME}
+    volumes:
+      - ${MAILCORE_CERT_DIR:-./data/certs}:/certs
+  postfix:
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    volumes: !override
+      - ./docker/postfix:/config:ro
+      - ${MAILCORE_CERT_DIR:-./data/certs}:/certs:ro
+      - ${POSTFIX_QUEUE_VOLUME:-postfix-queue}:/var/spool/postfix
+  dovecot:
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    ports:
+      - 127.0.0.1:8080:8080
+    volumes: !override
+      - ./docker/dovecot:/config:ro
+      - ${MAILCORE_CERT_DIR:-./data/certs}:/certs:ro
+      - ${DOVECOT_MAIL_VOLUME:-mail}:/srv/vmail
+  rspamd:
+    volumes: !override
+      - ./docker/rspamd:/config:ro
+      - ./docker/rspamd/local.d:/etc/rspamd/local.d:ro
+      - ${RSPAMD_VOLUME:-rspamd}:/var/lib/rspamd
+  unbound:
+    volumes: !override
+      - ./docker/unbound:/config:ro
+  postgres:
+    ports:
+      - 127.0.0.1:${POSTGRES_PORT:-5432}:5432
+    volumes: !override
+      - ./docker/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+      - ${POSTGRES_VOLUME:-postgres}:/var/lib/postgresql
+  redis:
+    ports:
+      - 127.0.0.1:6379:6379
