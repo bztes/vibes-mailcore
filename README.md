@@ -46,3 +46,7 @@ Variables can be changed in `.env` (see [.env.example](.env.example)), then `doc
 - No SRS: forwarding to external addresses may be rejected by strict SPF/DMARC senders.
 - Deleting a domain or mailbox keeps its mail on disk.
 - No auto-reply / vacation in the UI yet.
+
+## License
+
+[AGPL-3.0](LICENSE)
