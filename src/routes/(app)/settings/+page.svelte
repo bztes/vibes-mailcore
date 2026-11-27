@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { changePassword, getMe } from '#lib/remote/auth.remote.js';
 	import { Alert, Button, Card, Field, FormActions, Input } from '#lib/components/ui/index.js';
+	import TwoFactorCard from './TwoFactorCard.svelte';
 
 	const me = $derived(await getMe());
 	const { _current, _password } = changePassword.fields;
@@ -10,7 +11,7 @@
 
 <h1 class="mb-6 text-2xl font-semibold tracking-tight">Settings</h1>
 
-<div class="max-w-lg">
+<div class="grid max-w-lg gap-6">
 	<Card title="Your password" description="For signing in to Mailcore as {me.email}.">
 		<form
 			{...changePassword.enhance(async (f) => {
@@ -32,4 +33,5 @@
 			</FormActions>
 		</form>
 	</Card>
+	<TwoFactorCard />
 </div>

@@ -3,9 +3,10 @@ import { invalid } from '@sveltejs/kit';
 import { and, asc, count, eq, sql } from 'drizzle-orm';
 import { form, query } from '$app/server';
 import { db } from '#lib/server/db/index.js';
-import { account, domainManager } from '#lib/server/db/schema.js';
+import { account, domainManager, session } from '#lib/server/db/schema.js';
 import { requireAdmin } from '#lib/server/auth.js';
 import { hashPassword } from '#lib/server/password.js';
+import { accountsWithTotp, removeTotp } from '#lib/server/totp.js';
 import { createAccountSchema, password } from '#lib/schemas.js';
 
 export const listAccounts = query(async () => {
@@ -15,19 +16,22 @@ export const listAccounts = query(async () => {
 		.from(domainManager)
 		.groupBy(domainManager.accountId)
 		.as('d');
-	const rows = await db
-		.select({
-			id: account.id,
-			email: account.email,
-			name: account.name,
-			role: account.role,
-			createdAt: account.createdAt,
-			domains: domains.n
-		})
-		.from(account)
-		.leftJoin(domains, eq(domains.accountId, account.id))
-		.orderBy(asc(account.email));
-	return rows.map((r) => ({ ...r, domains: r.domains ?? 0 }));
+	const [rows, withTotp] = await Promise.all([
+		db
+			.select({
+				id: account.id,
+				email: account.email,
+				name: account.name,
+				role: account.role,
+				createdAt: account.createdAt,
+				domains: domains.n
+			})
+			.from(account)
+			.leftJoin(domains, eq(domains.accountId, account.id))
+			.orderBy(asc(account.email)),
+		accountsWithTotp()
+	]);
+	return rows.map((r) => ({ ...r, domains: r.domains ?? 0, mfa: withTotp.has(r.id) }));
 });
 
 export const createAccount = form(
@@ -83,5 +87,15 @@ export const deleteAccount = form(
 			);
 		}
 		await db.delete(account).where(eq(account.id, id));
+	}
+);
+
+/** For locked out users: removes their authenticator app and recovery codes. */
+export const resetAccountMfa = form(
+	v.object({ id: v.pipe(v.string(), v.uuid()) }),
+	async ({ id }) => {
+		requireAdmin();
+		await removeTotp(id);
+		await db.delete(session).where(eq(session.accountId, id));
 	}
 );

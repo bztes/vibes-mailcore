@@ -3,6 +3,8 @@ import {
 	bigint,
 	boolean,
 	index,
+	integer,
+	jsonb,
 	pgEnum,
 	pgTable,
 	pgView,
@@ -30,6 +32,8 @@ export const account = pgTable('account', {
 	createdAt: createdAt()
 });
 
+export const sessionStage = pgEnum('session_stage', ['full', 'mfa']);
+
 export const session = pgTable(
 	'session',
 	{
@@ -38,9 +42,36 @@ export const session = pgTable(
 		accountId: uuid('account_id')
 			.notNull()
 			.references(() => account.id, { onDelete: 'cascade' }),
-		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull()
+		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+		/** 'mfa' = password ok, second factor still missing */
+		stage: sessionStage('stage').notNull().default('full'),
+		/** wrong second-factor codes entered in this (pending) session */
+		mfaFailures: integer('mfa_failures').notNull().default(0)
 	},
 	(t) => [index('session_account_idx').on(t.accountId)]
+);
+
+export type TotpData = { secret: string; lastStep: number };
+/** sha256 of a one-time recovery code */
+export type RecoveryData = { hash: string };
+
+/** totp_pending = setup started but not confirmed with a code yet */
+export const credentialType = pgEnum('credential_type', ['totp', 'totp_pending', 'recovery']);
+
+/** Login credentials besides the password (TOTP, recovery codes, later passkeys). */
+export const credential = pgTable(
+	'credential',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		accountId: uuid('account_id')
+			.notNull()
+			.references(() => account.id, { onDelete: 'cascade' }),
+		type: credentialType('type').notNull(),
+		data: jsonb('data').$type<TotpData | RecoveryData>().notNull(),
+		createdAt: createdAt(),
+		lastUsedAt: timestamp('last_used_at', { withTimezone: true })
+	},
+	(t) => [index('credential_account_type_idx').on(t.accountId, t.type)]
 );
 
 // ---------------------------------------------------------------------------

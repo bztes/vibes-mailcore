@@ -4,8 +4,17 @@ import { eq, sql } from 'drizzle-orm';
 import { form, getRequestEvent, query } from '$app/server';
 import { db } from '#lib/server/db/index.js';
 import { account } from '#lib/server/db/schema.js';
-import { createSession, destroySession, requireUser } from '#lib/server/auth.js';
+import {
+	checkUserPassword,
+	destroySession,
+	recordMfaFailure,
+	requireStage,
+	requireUser,
+	startLogin,
+	upgradeSession
+} from '#lib/server/auth.js';
 import { hashPassword, verifyPassword } from '#lib/server/password.js';
+import { verifySecondFactor } from '#lib/server/totp.js';
 import { changePasswordSchema, email as emailSchema, password } from '#lib/schemas.js';
 
 // Simple in-memory brute-force protection: 10 failed logins per IP per 15 minutes.
@@ -60,8 +69,7 @@ export const setup = form(
 		if (!id) invalid('Sign-up is closed. Sign in instead.');
 
 		console.log(`[mailcore] Created admin account ${email}`);
-		await createSession(getRequestEvent().cookies, id);
-		redirect(303, '/');
+		redirect(303, await startLogin(id));
 	}
 );
 
@@ -83,20 +91,30 @@ export const login = form(
 		}
 
 		failures.delete(ip);
-		await createSession(event.cookies, user.id);
-		redirect(303, '/');
+		redirect(303, await startLogin(user.id));
 	}
 );
 
+/** Second login step: TOTP code or recovery code. */
+export const verifyLogin = form(v.object({ _code: v.string() }), async ({ _code }) => {
+	const pending = requireStage('mfa');
+	if (!(await verifySecondFactor(pending.id, _code))) {
+		await new Promise((r) => setTimeout(r, 500));
+		if (!(await recordMfaFailure())) redirect(303, '/login');
+		invalid('Wrong code');
+	}
+	await upgradeSession();
+	redirect(303, '/');
+});
+
 export const logout = form(async () => {
-	await destroySession(getRequestEvent().cookies);
+	await destroySession();
 	redirect(303, '/login');
 });
 
 export const changePassword = form(changePasswordSchema, async ({ _current, _password }, issue) => {
 	const me = requireUser();
-	const [row] = await db.select().from(account).where(eq(account.id, me.id));
-	if (!(await verifyPassword(row.passwordHash, _current))) {
+	if (!(await checkUserPassword(me.id, _current))) {
 		invalid(issue._current('Current password is wrong'));
 	}
 	await db

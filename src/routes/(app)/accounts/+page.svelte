@@ -1,6 +1,12 @@
 <script lang="ts">
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import { createAccount, deleteAccount, listAccounts } from '#lib/remote/accounts.remote.js';
+	import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
+	import {
+		createAccount,
+		deleteAccount,
+		listAccounts,
+		resetAccountMfa
+	} from '#lib/remote/accounts.remote.js';
 	import { getMe } from '#lib/remote/auth.remote.js';
 	import {
 		Badge,
@@ -51,6 +57,7 @@
 							<div class="flex items-center gap-2">
 								<span class="font-medium text-zinc-900">{a.email}</span>
 								{#if a.role === 'admin'}<Badge tone="info">Admin</Badge>{/if}
+								{#if a.mfa}<Badge tone="ok">2FA</Badge>{/if}
 								{#if a.id === me.id}<Badge>You</Badge>{/if}
 							</div>
 							{#if a.name}<div class="text-xs text-zinc-500">{a.name}</div>{/if}
@@ -59,6 +66,16 @@
 						<td class={t.td()}>
 							<div class="flex justify-end gap-1">
 								<ResetPassword account={a} />
+								{#if a.mfa}
+									<ConfirmDelete
+										form={resetAccountMfa.for(a.id)}
+										id={a.id}
+										icon={ShieldOffIcon}
+										title="Turn off two-factor auth for {a.email}?"
+										message="Their authenticator app and recovery codes stop working and they are signed out."
+										confirmLabel="Turn off"
+									/>
+								{/if}
 								{#if a.id !== me.id}
 									<ConfirmDelete
 										form={deleteAccount.for(a.id)}

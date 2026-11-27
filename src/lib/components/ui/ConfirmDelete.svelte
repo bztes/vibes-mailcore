@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Component } from 'svelte';
 	import type { RemoteForm } from '$app/server';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import Button from './Button.svelte';
@@ -13,6 +14,7 @@
 		message,
 		label,
 		confirmLabel = 'Delete',
+		icon: Icon = Trash2Icon,
 		hidden = {}
 	}: {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,6 +26,8 @@
 		label?: string;
 		/** text on the confirm button */
 		confirmLabel?: string;
+		/** trigger icon */
+		icon?: Component;
 		/** extra fields the form needs besides `id` */
 		hidden?: Record<string, string>;
 	} = $props();
@@ -33,12 +37,12 @@
 
 {#if label}
 	<Button variant="secondary" onclick={() => (open = true)}>
-		<Trash2Icon />
+		<Icon />
 		{label}
 	</Button>
 {:else}
 	<Button variant="ghost" size="icon" onclick={() => (open = true)} aria-label={title} {title}>
-		<Trash2Icon />
+		<Icon />
 	</Button>
 {/if}
 
