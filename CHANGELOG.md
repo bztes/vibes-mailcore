@@ -1,5 +1,11 @@
 # @bztes/vibes-mailcore
 
+## 0.2.0
+
+### Minor Changes
+
+- [`c1885be`](https://github.com/bztes/vibes-mailcore/commit/c1885bef000bf786af1f580ad9bca4e3ea9a9ad4) Thanks [@bztes](https://github.com/bztes)! - Two-factor authentication with authenticator apps
+
 ## 0.1.0
 
 ### Minor Changes
